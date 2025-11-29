@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Invoice (PKR)</title>
+<link rel="manifest" href="manifest.json">
+
+<style>
+    :root {
+        --primary: #6200EE;
+        --primary-dark: #4a00b8;
+        --danger: #e53935;
+        --bg: #f1f3f6;
+        --card-bg: #ffffff;
+        --radius: 14px;
+        --shadow: 0 4px 10px rgba(0,0,0,0.08);
+    }
+    body { margin:0; background:var(--bg); font-family:Segoe UI,Arial; color:#222;}
+    header { background:linear-gradient(135deg,var(--primary),var(--primary-dark)); color:#fff; padding:20px; text-align:center; font-size:26px; font-weight:bold; box-shadow:var(--shadow);}
+    .tab { display:flex; background:#fff; box-shadow:var(--shadow); position:sticky; top:0; z-index:5;}
+    .tab button { flex:1; padding:14px; border:none; cursor:pointer; background:#eee; font-size:16px; font-weight:600;}
+    .tab button.active { background:var(--primary); color:#fff;}
+    .page { padding:20px; display:none;}
+    input { width:100%; padding:12px; margin:8px 0; border-radius:var(--radius); border:1px solid #ddd; font-size:16px; box-shadow:inset 0 2px 3px rgba(0,0,0,0.04);}
+    button { width:100%; padding:12px; margin:8px 0; border-radius:var(--radius); border:none; background:var(--primary); color:#fff; font-size:16px; font-weight:bold; cursor:pointer; transition:0.2s; box-shadow:var(--shadow);}
+    button:hover { background:var(--primary-dark);}
+    .danger-btn { background:var(--danger);}
+    .danger-btn:hover { background:#b71c1c;}
+    .list-item { background:var(--card-bg); padding:15px; border-radius:var(--radius); margin:10px 0; box-shadow:var(--shadow); transition:0.2s;}
+    .list-item:hover { transform:scale(1.01);}
+    h2,h3 { color:var(--primary-dark);}
+</style>
+</head>
+<body>
+
+<header>Smart Invoice (PKR)</header>
+
+<div class="tab">
+    <button class="active" onclick="openPage('products')">Products</button>
+    <button onclick="openPage('invoice')">Invoice</button>
+</div>
+
+<div id="products" class="page" style="display:block;">
+    <h2>Products</h2>
+    <input id="productSearch" placeholder="Search products..." oninput="renderProducts()">
+    <div id="productList"></div>
+    <h3>Add Product</h3>
+    <input id="pName" placeholder="Product Name">
+    <input id="pRate" placeholder="Rate (PKR)" type="number">
+    <button onclick="addProduct()">Add Product</button>
+</div>
+
+<div id="invoice" class="page">
+    <h2>Create Invoice</h2>
+    <input id="invoiceName" placeholder="Customer Name">
+    <input id="invoiceSearch" placeholder="Search product to add..." oninput="renderInvoiceSearch()">
+    <div id="invoiceSearchList"></div>
+    <h3>Invoice Items</h3>
+    <div id="invoiceList"></div>
+    <h3>Total: PKR <span id="totalAmount">0</span></h3>
+    <button class="danger-btn" onclick="clearInvoice()">Clear Bill</button>
+    <button onclick="generatePDF()">Download PDF</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+function loadProducts(){return JSON.parse(localStorage.getItem("products")||"[]");}
+function saveProducts(x){localStorage.setItem("products",JSON.stringify(x));}
+function loadInvoice(){return JSON.parse(localStorage.getItem("invoice")||"[]");}
+function saveInvoice(x){localStorage.setItem("invoice",JSON.stringify(x));}
+
+function openPage(id){
+    document.querySelectorAll(".page").forEach(p=>p.style.display="none");
+    document.getElementById(id).style.display="block";
+    document.querySelectorAll(".tab button").forEach(b=>b.classList.remove("active"));
+    event.target.classList.add("active");
+    if(id==="products") renderProducts();
+    if(id==="invoice"){ renderInvoiceSearch(); renderInvoice(); }
+}
+
+function renderProducts(){
+    const list=loadProducts();
+    const q=document.getElementById("productSearch").value.toLowerCase();
+    const box=document.getElementById("productList");
+    box.innerHTML="";
+    list.filter(p=>p.name.toLowerCase().includes(q)).forEach(p=>{
+        const div=document.createElement("div");
+        div.className="list-item";
+        div.innerHTML=`<b>${p.name}</b> — PKR ${p.rate}<br><br>
+        <button class="danger-btn" onclick="deleteProduct(${p.id})">Delete</button>`;
+        box.appendChild(div);
+    });
+}
+
+function addProduct(){
+    const name=document.getElementById("pName").value.trim();
+    const rate=Number(document.getElementById("pRate").value);
+    if(!name||!rate)return alert("Enter product name & rate");
+    const list=loadProducts();
+    list.push({id:Date.now(),name,rate});
+    saveProducts(list);
+    renderProducts();
+}
+
+function deleteProduct(id){
+    saveProducts(loadProducts().filter(p=>p.id!==id));
+    renderProducts();
+}
+
+function renderInvoiceSearch(){
+    const list=loadProducts();
+    const q=document.getElementById("invoiceSearch").value.toLowerCase();
+    const box=document.getElementById("invoiceSearchList");
+    box.innerHTML="";
+    list.filter(p=>p.name.toLowerCase().includes(q)).forEach(p=>{
+        const div=document.createElement("div");
+        div.className="list-item";
+        div.innerHTML=`<b>${p.name}</b> — PKR ${p.rate}
+        <button onclick="addToInvoice(${p.id})">Add</button>`;
+        box.appendChild(div);
+    });
+}
+
+function addToInvoice(id){
+    const p=loadProducts().find(x=>x.id===id);
+    const invoice=loadInvoice();
+    invoice.push({id:Date.now(),productId:id,name:p.name,rate:p.rate,quantity:1,discount:0});
+    saveInvoice(invoice);
+    renderInvoice();
+}
+
+function renderInvoice(){
+    const list=loadInvoice();
+    const box=document.getElementById("invoiceList");
+    box.innerHTML="";
+    let total=0;
+    list.forEach(i=>{
+        const amount=(i.rate*i.quantity)-i.discount;
+        total+=amount;
+        const div=document.createElement("div");
+        div.className="list-item";
+        div.innerHTML=`<b>${i.name}</b> — PKR ${i.rate}<br>
+        Qty: <input type="number" value="${i.quantity}" onchange="updateQty(${i.id}, this.value)">
+        Discount: <input type="number" value="${i.discount}" onchange="updateDisc(${i.id}, this.value)">
+        <b>Subtotal: PKR ${amount}</b><br><br>
+        <button class="danger-btn" onclick="deleteInvoiceItem(${i.id})">Remove</button>`;
+        box.appendChild(div);
+    });
+    document.getElementById("totalAmount").innerText=total;
+}
+
+function updateQty(id,qty){
+    const inv=loadInvoice(); const it=inv.find(x=>x.id===id);
+    it.quantity=Number(qty); saveInvoice(inv); renderInvoice();
+}
+
+function updateDisc(id,disc){
+    const inv=loadInvoice(); const it=inv.find(x=>x.id===id);
+    it.discount=Number(disc); saveInvoice(inv); renderInvoice();
+}
+
+function deleteInvoiceItem(id){
+    saveInvoice(loadInvoice().filter(x=>x.id!==id));
+    renderInvoice();
+}
+
+function clearInvoice(){ saveInvoice([]); renderInvoice(); }
+
+async function generatePDF(){
+    const {jsPDF}=window.jspdf;
+    const doc=new jsPDF();
+    let y=12;
+    const name=document.getElementById("invoiceName").value;
+    doc.text("Invoice (PKR)",10,y); y+=10;
+    if(name){doc.text("Customer: "+name,10,y); y+=10;}
+    const list=loadInvoice();
+    list.forEach(i=>{
+        doc.text(`${i.name} | Rate ${i.rate} | Qty ${i.quantity} | Disc ${i.discount}`,10,y);
+        y+=8;
+    });
+    y+=10;
+    doc.text("Total: PKR "+document.getElementById("totalAmount").innerText,10,y);
+    doc.save("invoice.pdf");
+}
+
+if("serviceWorker" in navigator){
+    navigator.serviceWorker.register("service-worker.js");
+}
+</script>
+</body>
+</html>
